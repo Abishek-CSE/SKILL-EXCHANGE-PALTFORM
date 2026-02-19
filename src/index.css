@@ -1,0 +1,50 @@
+@import "tailwindcss";
+
+:root {
+    --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+}
+
+body {
+    margin: 0;
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-off-smoothing: grayscale;
+    background-color: #f8fafc;
+    color: #0f172a;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+button {
+    cursor: pointer;
+}
+
+@layer utilities {
+    .glass {
+        @apply backdrop-blur-md bg-white/70 border border-white/20 shadow-lg;
+    }
+
+    .text-gradient {
+        @apply bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-indigo-600;
+    }
+}
+
+/* Custom Scrollbar for Light Theme */
+::-webkit-scrollbar {
+    width: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #f8fafc;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #e2e8f0;
+    border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #cbd5e1;
+}
