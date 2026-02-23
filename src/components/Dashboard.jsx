@@ -1,219 +1,482 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import toast from "react-hot-toast";
+import { 
+  FiActivity, 
+  FiAward, 
+  FiCheckCircle, 
+  FiClock, 
+  FiDollarSign, 
+  FiLock, 
+  FiSend, 
+  FiDownload,
+  FiFilter,
+  FiSearch,
+  FiRefreshCw,
+  FiTrendingUp,
+  FiUserCheck,
+  FiXCircle
+} from "react-icons/fi";
 
 const Dashboard = () => {
-  const [proposals, setProposals] = useState(() => JSON.parse(localStorage.getItem("skillbar_proposals") || "[]"));
-  const [currentUser, setCurrentUser] = useState(() => JSON.parse(localStorage.getItem("Skillbar") || "{}"));
-  const [selectedRating, setSelectedRating] = useState(5);
   const navigate = useNavigate();
+  const [proposals, setProposals] = useState([]);
+  const [currentUser, setCurrentUser] = useState({});
+  const [selectedRating, setSelectedRating] = useState(5);
+  const [filterStatus, setFilterStatus] = useState("all");
+  const [searchTerm, setSearchTerm] = useState("");
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
+  // Load data from localStorage
   useEffect(() => {
-    if (!localStorage.getItem("isLoggedIn")) {
-      navigate("/login");
-    }
+    const loadData = () => {
+      const storedProposals = localStorage.getItem("skillbar_proposals");
+      const storedUser = localStorage.getItem("Skillbar");
+      const isLoggedIn = localStorage.getItem("isLoggedIn");
+
+      setProposals(storedProposals ? JSON.parse(storedProposals) : []);
+      setCurrentUser(storedUser ? JSON.parse(storedUser) : {});
+
+      if (!isLoggedIn) {
+        navigate("/login");
+      }
+    };
+
+    loadData();
   }, [navigate]);
 
-  const handleContractAction = (id, action) => {
+  // Refresh data
+  const refreshData = useCallback(() => {
+    setIsRefreshing(true);
+    const storedProposals = localStorage.getItem("skillbar_proposals");
+    const storedUser = localStorage.getItem("Skillbar");
+    
+    setProposals(storedProposals ? JSON.parse(storedProposals) : []);
+    setCurrentUser(storedUser ? JSON.parse(storedUser) : {});
+    
+    setTimeout(() => setIsRefreshing(false), 500);
+    toast.success("Dashboard synced successfully");
+  }, []);
+
+  // Handle contract actions
+  const handleContractAction = useCallback((id, action) => {
+    const proposal = proposals.find(p => p.id === id);
+    if (!proposal) return;
+
     const updatedProposals = proposals.map(p => {
       if (p.id === id) {
-        if (action === "Accept") return { ...p, status: "Active", timestamp: new Date().toISOString() };
-        if (action === "Reject") return { ...p, status: "Rejected" };
-        if (action === "Complete") return { ...p, status: "Completed", rating: selectedRating };
+        switch(action) {
+          case "Accept":
+            return { ...p, status: "Active", acceptedAt: new Date().toISOString() };
+          case "Reject":
+            return { ...p, status: "Rejected", rejectedAt: new Date().toISOString() };
+          case "Complete":
+            return { 
+              ...p, 
+              status: "Completed", 
+              rating: selectedRating,
+              completedAt: new Date().toISOString() 
+            };
+          default:
+            return p;
+        }
       }
       return p;
     });
 
-    if (action === "Accept") {
-       const updatedUser = { 
-         ...currentUser, 
-         wallet: { 
-           ...currentUser.wallet, 
-           total: (currentUser.wallet?.total || 10) - 1,
-           locked: (currentUser.wallet?.locked || 0) + 1
-         } 
-       };
-       setCurrentUser(updatedUser);
-       localStorage.setItem("Skillbar", JSON.stringify(updatedUser));
-       toast.success("Proposal Accepted. Credits moved to Escrow.");
+    // Update user wallet and reputation
+    if (action === "Accept" && proposal.to === currentUser?.name) {
+      const updatedUser = { 
+        ...currentUser, 
+        wallet: { 
+          total: Math.max(0, (currentUser.wallet?.total || 10) - 1),
+          locked: (currentUser.wallet?.locked || 0) + 1
+        },
+        stats: {
+          ...currentUser.stats,
+          acceptedProposals: (currentUser.stats?.acceptedProposals || 0) + 1
+        }
+      };
+      setCurrentUser(updatedUser);
+      localStorage.setItem("Skillbar", JSON.stringify(updatedUser));
+      toast.success("Proposal accepted • 1 credit moved to escrow", {
+        icon: "🔒",
+        duration: 3000
+      });
     }
 
-    if (action === "Reject") {
-        toast.error("Proposal Declined.");
+    if (action === "Reject" && proposal.to === currentUser?.name) {
+      const updatedUser = { 
+        ...currentUser,
+        stats: {
+          ...currentUser.stats,
+          rejectedProposals: (currentUser.stats?.rejectedProposals || 0) + 1
+        }
+      };
+      setCurrentUser(updatedUser);
+      localStorage.setItem("Skillbar", JSON.stringify(updatedUser));
+      toast.error("Proposal declined", {
+        icon: "✖️",
+        duration: 2000
+      });
     }
 
     if (action === "Complete") {
-        const updatedUser = { 
-            ...currentUser, 
-            wallet: { 
-              ...currentUser.wallet, 
-              locked: (currentUser.wallet?.locked || 1) - 1,
-              total: (currentUser.wallet?.total || 9) + 1
-            },
-            reputation: {
-                ...currentUser.reputation,
-                rating: ((currentUser.reputation?.rating || 0) * (currentUser.reputation?.completed || 0) + selectedRating) / ((currentUser.reputation?.completed || 0) + 1),
-                completed: (currentUser.reputation?.completed || 0) + 1,
-                completionRate: "100%"
-            }
-        };
-        setCurrentUser(updatedUser);
-        localStorage.setItem("Skillbar", JSON.stringify(updatedUser));
-        toast.success(`Skill exchange finalized. + ${selectedRating} to your reputation.`);
+      const currentRating = currentUser.reputation?.rating || 0;
+      const completedCount = currentUser.reputation?.completed || 0;
+      const newRating = ((currentRating * completedCount) + selectedRating) / (completedCount + 1);
+
+      const updatedUser = { 
+        ...currentUser, 
+        wallet: { 
+          total: (currentUser.wallet?.total || 9) + 1,
+          locked: Math.max(0, (currentUser.wallet?.locked || 1) - 1)
+        },
+        reputation: {
+          rating: Number(newRating.toFixed(1)),
+          completed: completedCount + 1,
+          completionRate: "100%"
+        },
+        stats: {
+          ...currentUser.stats,
+          completedProposals: (currentUser.stats?.completedProposals || 0) + 1,
+          totalEarned: (currentUser.stats?.totalEarned || 0) + 1
+        }
+      };
+      setCurrentUser(updatedUser);
+      localStorage.setItem("Skillbar", JSON.stringify(updatedUser));
+      toast.success(`Proposal completed! +${selectedRating} reputation points`, {
+        icon: "⭐",
+        duration: 3000
+      });
     }
 
     setProposals(updatedProposals);
     localStorage.setItem("skillbar_proposals", JSON.stringify(updatedProposals));
-  };
+  }, [proposals, currentUser, selectedRating]);
 
-  const filteredProposals = proposals.filter(p => p.to === currentUser?.name || p.from === currentUser?.name);
+  // Filter and search proposals
+  const filteredProposals = useMemo(() => {
+    const userProposals = proposals.filter(p => 
+      p.to === currentUser?.name || p.from === currentUser?.name
+    );
 
-  const stats = [
-    { label: "Available Credits", value: currentUser?.wallet?.total || 0, color: "blue", icon: "💎" },
-    { label: "Escrowed", value: currentUser?.wallet?.locked || 0, color: "orange", icon: "🔒" },
-    { label: "Reputation", value: `${(currentUser?.reputation?.rating || 0).toFixed(1)} ★`, color: "purple", icon: "⭐" }
-  ];
+    return userProposals.filter(p => {
+      const matchesStatus = filterStatus === "all" || p.status.toLowerCase() === filterStatus.toLowerCase();
+      const matchesSearch = searchTerm === "" || 
+        p.from?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        p.to?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        p.message?.toLowerCase().includes(searchTerm.toLowerCase());
+      
+      return matchesStatus && matchesSearch;
+    });
+  }, [proposals, currentUser, filterStatus, searchTerm]);
+
+  // Calculate statistics
+  const stats = useMemo(() => [
+    { 
+      label: "Available Credits", 
+      value: currentUser?.wallet?.total || 0, 
+      color: "blue", 
+      icon: <FiDollarSign className="w-6 h-6" />,
+      change: "+12%",
+      trend: "up"
+    },
+    { 
+      label: "Escrowed", 
+      value: currentUser?.wallet?.locked || 0, 
+      color: "orange", 
+      icon: <FiLock className="w-6 h-6" />,
+      change: "-3%",
+      trend: "down"
+    },
+    { 
+      label: "Reputation", 
+      value: `${(currentUser?.reputation?.rating || 0).toFixed(1)}`, 
+      suffix: "★",
+      color: "purple", 
+      icon: <FiAward className="w-6 h-6" />,
+      change: "+0.2",
+      trend: "up"
+    }
+  ], [currentUser]);
+
+  // Proposal counts
+  const proposalCounts = useMemo(() => ({
+    pending: proposals.filter(p => p.status === "Pending" && p.to === currentUser?.name).length,
+    active: proposals.filter(p => p.status === "Active").length,
+    completed: proposals.filter(p => p.status === "Completed").length
+  }), [proposals, currentUser]);
 
   return (
-    <div className="min-h-screen bg-[#f8fafc] pt-32 pb-20 px-4 md:px-12 relative overflow-hidden">
-      <div className="max-w-7xl mx-auto relative z-10">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 pt-28 pb-12 px-4 md:px-8 lg:px-12">
+      <div className="max-w-7xl mx-auto">
         {/* Header Section */}
         <motion.div 
-          initial={{ opacity: 0, y: 20 }}
+          initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="mb-16 flex flex-col md:flex-row justify-between items-end gap-6"
+          className="mb-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-6"
         >
           <div>
-            <h1 className="text-6xl font-black text-slate-900 tracking-tighter mb-4 leading-none uppercase">
-              Control <span className="text-blue-600">Center</span>
-            </h1>
-            <p className="text-slate-400 font-bold uppercase tracking-widest text-xs ml-1">Account: <span className="text-slate-900">{currentUser?.name || "Active Session"}</span></p>
+            <div className="flex items-center gap-4 mb-3">
+              <h1 className="text-4xl md:text-5xl font-bold text-slate-900 tracking-tight">
+                Dashboard
+              </h1>
+              <span className="px-3 py-1 bg-emerald-50 text-emerald-600 text-xs font-semibold rounded-full border border-emerald-100">
+                LIVE
+              </span>
+            </div>
+            <div className="flex items-center gap-3 text-slate-500">
+              <FiUserCheck className="w-4 h-4" />
+              <span className="text-sm font-medium">{currentUser?.name || "Active Session"}</span>
+              <span className="w-1 h-1 bg-slate-300 rounded-full" />
+              <span className="text-sm">Member since {new Date().getFullYear()}</span>
+            </div>
           </div>
-          <div className="bg-white border border-slate-100 px-6 py-3 rounded-2xl flex items-center gap-3 shadow-sm">
-            <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
-            <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 italic">Sync Operational</span>
+          
+          <div className="flex items-center gap-3">
+            <motion.button
+              whileTap={{ scale: 0.95 }}
+              onClick={refreshData}
+              className="p-3 bg-white border border-slate-200 rounded-xl text-slate-600 hover:bg-slate-50 transition-colors"
+            >
+              <FiRefreshCw className={`w-4 h-4 ${isRefreshing ? "animate-spin" : ""}`} />
+            </motion.button>
+            <div className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-xl">
+              <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
+              <span className="text-xs font-medium text-slate-600">System Online</span>
+            </div>
           </div>
         </motion.div>
 
         {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-16">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
           {stats.map((stat, i) => (
             <motion.div
               key={stat.label}
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: i * 0.1 }}
-              className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-xl hover:shadow-2xl transition-all group overflow-hidden relative"
+              className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-all"
             >
-              <div className="absolute top-0 right-0 w-32 h-32 bg-slate-50 rounded-full -mr-16 -mt-16 group-hover:scale-110 transition-transform duration-500" />
-              <div className="flex items-center justify-between mb-8 relative z-10">
-                <span className="text-4xl">{stat.icon}</span>
-                <span className={`text-[10px] font-black uppercase tracking-widest text-${stat.color}-600 bg-${stat.color}-50 px-3 py-1 rounded-full border border-${stat.color}-100`}>Verified</span>
+              <div className="flex items-center justify-between mb-4">
+                <div className={`p-3 bg-${stat.color}-50 rounded-xl text-${stat.color}-600`}>
+                  {stat.icon}
+                </div>
+                {stat.change && (
+                  <span className={`text-xs font-medium px-2 py-1 rounded-full ${
+                    stat.trend === "up" ? "bg-emerald-50 text-emerald-600" : "bg-red-50 text-red-600"
+                  }`}>
+                    {stat.change}
+                  </span>
+                )}
               </div>
-              <div className="relative z-10">
-                <h3 className="text-slate-400 text-xs font-black uppercase tracking-widest mb-2 ml-1">{stat.label}</h3>
-                <p className="text-5xl font-black text-slate-900 tracking-tighter">{stat.value}</p>
-              </div>
+              <h3 className="text-sm font-medium text-slate-500 mb-1">{stat.label}</h3>
+              <p className="text-3xl font-bold text-slate-900">
+                {stat.value}{stat.suffix}
+              </p>
             </motion.div>
           ))}
         </div>
+
+        {/* Quick Stats Row */}
+        <motion.div 
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.2 }}
+          className="grid grid-cols-3 gap-4 mb-8"
+        >
+          <div className="bg-blue-50 p-4 rounded-xl">
+            <p className="text-xs font-medium text-blue-600 mb-1">Pending Actions</p>
+            <p className="text-2xl font-bold text-blue-700">{proposalCounts.pending}</p>
+          </div>
+          <div className="bg-orange-50 p-4 rounded-xl">
+            <p className="text-xs font-medium text-orange-600 mb-1">Active Projects</p>
+            <p className="text-2xl font-bold text-orange-700">{proposalCounts.active}</p>
+          </div>
+          <div className="bg-emerald-50 p-4 rounded-xl">
+            <p className="text-xs font-medium text-emerald-600 mb-1">Completed</p>
+            <p className="text-2xl font-bold text-emerald-700">{proposalCounts.completed}</p>
+          </div>
+        </motion.div>
+
+        {/* Filters and Search */}
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+          className="mb-6 flex flex-col md:flex-row gap-4"
+        >
+          <div className="flex-1 relative">
+            <FiSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
+            <input
+              type="text"
+              placeholder="Search proposals..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-11 pr-4 py-3 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+            />
+          </div>
+          <div className="flex items-center gap-3">
+            <FiFilter className="text-slate-400 w-4 h-4" />
+            <select
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value)}
+              className="px-4 py-3 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+            >
+              <option value="all">All Status</option>
+              <option value="pending">Pending</option>
+              <option value="active">Active</option>
+              <option value="completed">Completed</option>
+              <option value="rejected">Rejected</option>
+            </select>
+          </div>
+        </motion.div>
 
         {/* Proposals Section */}
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3 }}
-          className="bg-white rounded-[4rem] border border-slate-100 shadow-2xl overflow-hidden"
+          transition={{ delay: 0.4 }}
+          className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden"
         >
-          <div className="p-12 border-b border-slate-50 flex flex-col md:flex-row justify-between items-center gap-6 bg-slate-50/30">
-            <div>
-              <h2 className="text-3xl font-black text-slate-900 tracking-tighter flex items-center gap-4">
-                PROTOCOL ACTIVITY <span className="bg-blue-600 text-white text-[9px] px-3 py-1 rounded-lg uppercase tracking-widest">Live</span>
-              </h2>
-              <p className="text-slate-400 font-bold uppercase tracking-widest text-[10px] mt-2 ml-1">Active and Historical Proposal Streams</p>
+          <div className="p-6 border-b border-slate-100 bg-slate-50/50">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
+                  <FiActivity className="w-5 h-5 text-blue-600" />
+                  Activity Feed
+                </h2>
+                <p className="text-sm text-slate-500 mt-1">
+                  Showing {filteredProposals.length} of {proposals.length} total proposals
+                </p>
+              </div>
             </div>
           </div>
 
-          <div className="p-8 md:p-12">
+          <div className="p-6">
             {filteredProposals.length === 0 ? (
-              <div className="py-32 text-center bg-slate-50/50 rounded-[3rem] border-2 border-dashed border-slate-100">
-                <div className="text-6xl mb-8 opacity-20 grayscale">📂</div>
-                <h3 className="text-2xl font-black text-slate-400 tracking-tight uppercase">No active protocols found</h3>
-                <p className="text-slate-500 mt-2 font-bold uppercase tracking-widest text-[10px]">Your activity log is currently empty</p>
+              <div className="py-16 text-center">
+                <div className="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <FiClock className="w-8 h-8 text-slate-400" />
+                </div>
+                <h3 className="text-lg font-semibold text-slate-900 mb-2">No proposals found</h3>
+                <p className="text-sm text-slate-500">
+                  {searchTerm || filterStatus !== "all" 
+                    ? "Try adjusting your filters" 
+                    : "Your activity feed will appear here"}
+                </p>
               </div>
             ) : (
-              <div className="grid gap-6">
+              <div className="space-y-4">
                 <AnimatePresence>
                   {filteredProposals.map((proposal) => (
                     <motion.div
                       layout
-                      initial={{ opacity: 0, x: -20 }}
-                      animate={{ opacity: 1, x: 0 }}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -20 }}
                       key={proposal.id}
-                      className="bg-white border border-slate-100 p-8 rounded-[2.5rem] flex flex-col lg:flex-row items-center justify-between gap-8 hover:bg-slate-50 transition-all hover:border-slate-200 shadow-md hover:shadow-lg"
+                      className="bg-white border border-slate-100 p-6 rounded-xl hover:border-slate-200 transition-all hover:shadow-sm"
                     >
-                      <div className="flex items-center gap-8 w-full lg:w-auto">
-                        <div className={`w-20 h-20 rounded-3xl flex items-center justify-center text-3xl shadow-xl border ${
-                          proposal.status === "Active" ? "bg-blue-50 border-blue-100 text-blue-600" : 
-                          proposal.status === "Completed" ? "bg-emerald-50 border-emerald-100 text-emerald-600" :
-                          proposal.status === "Rejected" ? "bg-red-50 border-red-100 text-red-600" :
-                          "bg-slate-50 border-slate-100 text-slate-600"
-                        }`}>
-                          {proposal.from === currentUser?.name ? "📤" : "📥"}
-                        </div>
-                        <div>
-                          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2 ml-1 italic">{proposal.status === "Active" ? "Live Logic Channel" : "Protocol Header"}</p>
-                          <h4 className="text-xl font-black text-slate-900 tracking-tight">
-                            {proposal.from === currentUser?.name ? `Sent to ${proposal.to}` : `From ${proposal.from}`}
-                          </h4>
-                          <span className="text-sm font-bold text-slate-500 uppercase tracking-widest text-[10px] bg-slate-100 px-3 py-1 rounded-full mt-2 inline-block">Skill: {proposal.message}</span>
-                        </div>
-                      </div>
-
-                      <div className="flex flex-wrap items-center gap-4 w-full lg:w-auto justify-center lg:justify-end">
-                        <div className={`px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border ${
-                          proposal.status === "Pending" ? "bg-orange-50 text-orange-600 border-orange-100" :
-                          proposal.status === "Active" ? "bg-blue-50 text-blue-600 border-blue-100" :
-                          proposal.status === "Completed" ? "bg-emerald-50 text-emerald-600 border-emerald-100" :
-                          "bg-red-50 text-red-600 border-red-100"
-                        }`}>
-                          {proposal.status}
-                        </div>
-
-                        {proposal.status === "Pending" && proposal.to === currentUser?.name && (
-                          <div className="flex gap-2">
-                            <button 
-                              onClick={() => handleContractAction(proposal.id, "Accept")}
-                              className="px-6 py-3 bg-slate-900 text-white rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-blue-600 transition-all shadow-xl active:scale-95"
-                            >
-                              Connect
-                            </button>
-                            <button 
-                              onClick={() => handleContractAction(proposal.id, "Reject")}
-                              className="px-6 py-3 bg-white text-red-600 border border-red-100 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-red-50 transition-all active:scale-95"
-                            >
-                              Decline
-                            </button>
+                      <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
+                        <div className="flex items-start gap-4 flex-1">
+                          <div className={`p-3 rounded-xl ${
+                            proposal.status === "Active" ? "bg-blue-50 text-blue-600" :
+                            proposal.status === "Completed" ? "bg-emerald-50 text-emerald-600" :
+                            proposal.status === "Rejected" ? "bg-red-50 text-red-600" :
+                            "bg-slate-50 text-slate-600"
+                          }`}>
+                            {proposal.from === currentUser?.name ? 
+                              <FiSend className="w-5 h-5" /> : 
+                              <FiDownload className="w-5 h-5" />
+                            }
                           </div>
-                        )}
-
-                        {proposal.status === "Active" && (
-                          <div className="flex items-center gap-4">
-                            <select 
-                              onChange={(e) => setSelectedRating(parseInt(e.target.value))}
-                              className="bg-white border border-slate-200 text-slate-900 text-[10px] font-black uppercase tracking-widest px-4 py-3 rounded-xl outline-none"
-                            >
-                              {[5,4,3,2,1].map(r => <option key={r} value={r}>{r} ★</option>)}
-                            </select>
-                            <button 
-                              onClick={() => handleContractAction(proposal.id, "Complete")}
-                              className="px-6 py-3 bg-emerald-600 text-white rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-emerald-500 transition-all shadow-xl active:scale-95"
-                            >
-                              Finalize
-                            </button>
+                          
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <h4 className="font-semibold text-slate-900">
+                                {proposal.from === currentUser?.name 
+                                  ? `To: ${proposal.to}` 
+                                  : `From: ${proposal.from}`}
+                              </h4>
+                              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                                proposal.status === "Pending" ? "bg-orange-50 text-orange-600" :
+                                proposal.status === "Active" ? "bg-blue-50 text-blue-600" :
+                                proposal.status === "Completed" ? "bg-emerald-50 text-emerald-600" :
+                                "bg-red-50 text-red-600"
+                              }`}>
+                                {proposal.status}
+                              </span>
+                            </div>
+                            
+                            <p className="text-sm text-slate-600 mb-2">
+                              Skill: <span className="font-medium">{proposal.message}</span>
+                            </p>
+                            
+                            {proposal.acceptedAt && (
+                              <p className="text-xs text-slate-400">
+                                Accepted: {new Date(proposal.acceptedAt).toLocaleDateString()}
+                              </p>
+                            )}
                           </div>
-                        )}
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
+                          {proposal.status === "Pending" && proposal.to === currentUser?.name && (
+                            <>
+                              <motion.button
+                                whileHover={{ scale: 1.02 }}
+                                whileTap={{ scale: 0.98 }}
+                                onClick={() => handleContractAction(proposal.id, "Accept")}
+                                className="px-5 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-xl hover:bg-blue-700 transition-colors flex items-center gap-2"
+                              >
+                                <FiCheckCircle className="w-4 h-4" />
+                                Accept
+                              </motion.button>
+                              <motion.button
+                                whileHover={{ scale: 1.02 }}
+                                whileTap={{ scale: 0.98 }}
+                                onClick={() => handleContractAction(proposal.id, "Reject")}
+                                className="px-5 py-2.5 bg-white text-red-600 border border-red-200 text-sm font-medium rounded-xl hover:bg-red-50 transition-colors flex items-center gap-2"
+                              >
+                                <FiXCircle className="w-4 h-4" />
+                                Decline
+                              </motion.button>
+                            </>
+                          )}
+
+                          {proposal.status === "Active" && (
+                            <div className="flex items-center gap-3">
+                              <select
+                                value={selectedRating}
+                                onChange={(e) => setSelectedRating(parseInt(e.target.value))}
+                                className="px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                              >
+                                {[5,4,3,2,1].map(r => (
+                                  <option key={r} value={r}>{r} Stars</option>
+                                ))}
+                              </select>
+                              <motion.button
+                                whileHover={{ scale: 1.02 }}
+                                whileTap={{ scale: 0.98 }}
+                                onClick={() => handleContractAction(proposal.id, "Complete")}
+                                className="px-5 py-2.5 bg-emerald-600 text-white text-sm font-medium rounded-xl hover:bg-emerald-700 transition-colors flex items-center gap-2"
+                              >
+                                <FiCheckCircle className="w-4 h-4" />
+                                Complete
+                              </motion.button>
+                            </div>
+                          )}
+
+                          {proposal.completedAt && (
+                            <div className="flex items-center gap-2 px-3 py-2 bg-slate-50 rounded-xl">
+                              <FiAward className="w-4 h-4 text-yellow-500" />
+                              <span className="text-sm font-medium">{proposal.rating} ★</span>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </motion.div>
                   ))}
@@ -222,6 +485,41 @@ const Dashboard = () => {
             )}
           </div>
         </motion.div>
+
+        {/* Performance Summary */}
+        {filteredProposals.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.5 }}
+            className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-4"
+          >
+            <div className="bg-white p-4 rounded-xl border border-slate-100">
+              <p className="text-xs text-slate-500 mb-1">Success Rate</p>
+              <p className="text-lg font-bold text-slate-900">
+                {proposals.filter(p => p.status === "Completed").length > 0
+                  ? Math.round((proposals.filter(p => p.status === "Completed").length / proposals.length) * 100)
+                  : 0}%
+              </p>
+            </div>
+            <div className="bg-white p-4 rounded-xl border border-slate-100">
+              <p className="text-xs text-slate-500 mb-1">Avg Rating</p>
+              <p className="text-lg font-bold text-slate-900">
+                {proposals.filter(p => p.rating).length > 0
+                  ? (proposals.reduce((acc, p) => acc + (p.rating || 0), 0) / proposals.filter(p => p.rating).length).toFixed(1)
+                  : "N/A"} ★
+              </p>
+            </div>
+            <div className="bg-white p-4 rounded-xl border border-slate-100">
+              <p className="text-xs text-slate-500 mb-1">Active Projects</p>
+              <p className="text-lg font-bold text-slate-900">{proposalCounts.active}</p>
+            </div>
+            <div className="bg-white p-4 rounded-xl border border-slate-100">
+              <p className="text-xs text-slate-500 mb-1">Total Earned</p>
+              <p className="text-lg font-bold text-slate-900">{currentUser?.stats?.totalEarned || 0} credits</p>
+            </div>
+          </motion.div>
+        )}
       </div>
     </div>
   );
